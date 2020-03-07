@@ -1,0 +1,144 @@
+---
+title: "Vignette"
+output: html_notebook
+---
+
+Eventually, convert this project to a package and use "usethis" to convert this document to a real vignette.
+
+```{r}
+library(tidyverse)
+```
+
+# Load example data 
+
+Eventually, include this data a part of the package
+
+```{r}
+source("example_data.R")
+source("block_data.R")
+source("stack_fastLink_matches.R")
+source("add_match_id.R")
+```
+
+```{r}
+cerebro_data %>% 
+  summarise(
+    `Rows` = nrow(.),
+    `Unique People` = max(p_id)
+  )
+```
+
+The cerebro data includes 42 rows for 31 unique people.
+
+# Reduce the search space
+
+In the real data, if we attempt to determine if every individual row in the entire data set is a match with every other individual row, it is a costly process. It becomes much more tractable if we temporarily reduce the data to one row for each combination of values that we want to investigate. In this case, we want to investigate all unique combinations of name, DOB, and address.
+
+```{r}
+df <- cerebro_data %>% 
+  mutate(
+    group = paste(
+      name_first, name_last, birth_year, birth_month, birth_day, address_num, address_street, sep = "_"
+    )
+  )
+```
+
+Add the group variable to the full data set so that unique id numbers can easily be joined back to the data later.
+
+```{r}
+df_unique_combo <- df %>% 
+  group_by(group) %>% 
+  filter(row_number() == 1) %>% 
+  ungroup()
+```
+
+```{r}
+df_unique_combo %>% 
+  summarise(
+    `Rows` = nrow(.),
+    `Unique People` = max(p_id)
+  )
+```
+
+The df_unique_combo data includes 41 rows for 31 unique people.
+Record number 3 was dropped because it didn't have any unique information for name, DOB, and address.
+
+# Use recordLinkage on unblocked dqta
+
+```{r}
+fastlink_out <- fastLink::fastLink(
+  dfA = df_unique_combo,
+  dfB = df_unique_combo,
+  varnames = c("name_first", "name_last", "birth_year", "birth_month", "birth_day", "address_num", "address_street"),
+  stringdist.match = c("name_first", "name_last", "address_street"),
+  numeric.match = c("birth_year", "birth_month", "birth_day", "address_num")
+)
+```
+
+```{r}
+matches <- stack_fastLink_matches(fastlink_out, df_unique_combo)
+matches
+```
+
+```{r}
+df_unique_combo_w_id <- add_match_id(df_unique_combo, fastlink_out)
+df_unique_combo_w_id
+```
+
+```{r}
+df_unique_combo_w_id %>% 
+  mutate(match_correct = id == p_id) %>% 
+  group_by(match_correct) %>% 
+  bfuncs::freq_table()
+```
+
+
+# Block the data on gender
+
+```{r}
+block_data(df_unique_combo, gender)
+```
+
+# Use recordLinkage on females
+
+```{r}
+fastlink_out_f <- fastLink::fastLink(
+  dfA = df_unique_combo_f,
+  dfB = df_unique_combo_f,
+  varnames = c("name_first", "name_last", "birth_year", "birth_month", "birth_day", "address_num", "address_street"),
+  stringdist.match = c("name_first", "name_last", "address_street"),
+  numeric.match = c("birth_year", "birth_month", "birth_day", "address_num")
+)
+```
+
+```{r}
+matches_f <- stack_fastLink_matches(fastlink_out_f, df_unique_combo_f)
+matches_f
+```
+
+```{r}
+df_unique_combo_f_w_id <- add_match_id(df_unique_combo_f, fastlink_out_f)
+df_unique_combo_f_w_id
+```
+
+# Use recordLinkage on females
+
+```{r}
+fastlink_out_m <- fastLink::fastLink(
+  dfA = df_unique_combo_m,
+  dfB = df_unique_combo_m,
+  varnames = c("name_first", "name_last", "birth_year", "birth_month", "birth_day", "address_num", "address_street"),
+  stringdist.match = c("name_first", "name_last", "address_street"),
+  numeric.match = c("birth_year", "birth_month", "birth_day", "address_num")
+)
+```
+
+```{r}
+matches_f <- stack_fastLink_matches(fastlink_out_f, df_unique_combo_f)
+matches_f
+```
+
+```{r}
+df_unique_combo_f_w_id <- add_match_id(df_unique_combo_f, fastlink_out_f)
+df_unique_combo_f_w_id
+```
