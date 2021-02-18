@@ -1,0 +1,497 @@
+---
+title: "Develop cerebro to help with linking the DETECT data sets"
+date: "2021-02-18"
+---
+
+Linking the DETECT 1-year data is taking forever! I'm hoping that I can come up with a process here that will that can be used to link these small data frames, then that same process will work well for DETECT as well as serve as a useful example for the cerebro package. 
+
+# Load packages
+
+```{r}
+library(dplyr)
+```
+
+# Simulate data
+
+## Function to simplify creating people
+
+```{r}
+create_person <- function(id, df, nf, nl, by, bm, bd, an, as, gn, reps = 1) {
+  out <- tibble::tibble(
+    p_id           = rep(id, reps),
+    df             = rep(df, reps), # Data frame the data came from.
+    date           = r_date(), # Date the record was created.
+    name_first     = rep(nf, reps),
+    name_last      = rep(nl, reps),
+    birth_year     = rep(by, reps),
+    birth_month    = rep(bm, reps),
+    birth_day      = rep(bd, reps),
+    address_num    = rep(an, reps),
+    address_street = rep(as, reps),
+    gender         = rep(gn, reps),
+    exposure       = sample(0:1, reps, replace = TRUE),
+    outcome        = sample(0:1, reps, replace = TRUE)
+  )
+  out
+}
+```
+
+## Random date generator
+
+Generates a random date from 2020.
+
+```{r}
+r_date <- function() {
+  sample(
+    seq(
+      as.Date('2020/01/01'),
+      as.Date('2020/12/31'),
+      by="day"
+    ), 1
+  )
+}
+```
+
+## Create data
+
+Although we are creating data for two different data frames, we will initially create them at the same time so that it's easier to see the typos that we are inserting. 
+
+```{r}
+# Bind them all into a single data set
+set.seed(123)
+cerebro_data <- bind_rows(
+  
+  # Person with one record in both data sets, but no typos or errors
+  create_person(1, 1, "Scott", "Summers", 1968, 04, 01, 430, "Main", "m", 1),
+  create_person(1, 2, "Scott", "Summers", 1968, 04, 01, 430, "Main", "m", 1),
+  
+  # Person with multiple records in both data sets, but no typos or errors
+  # Both rows in data set 2 are identical. This can represent multiple reporters
+  create_person(2, 1, "Robert", "Drake", 1968, 07, 01, 1001, "Cemetery Ridge", "m", 1),
+  create_person(2, 1, "Robert", "Drake", 1968, 07, 01, 1001, "Cemetery Ridge", "m", 1),
+  create_person(2, 2, "Robert", "Drake", 1968, 07, 01, 1001, "Cemetery Ridge", "m", 2),
+  
+  # Misspelled first name only
+  # One record in both data sets
+  # "Warren" is the correct spelling
+  create_person(3, 1, "Warren", "Worthington", 1974, 10, 12, 2536, "Dominy", "m", 1),
+  create_person(3, 2, "Waren", "Worthington", 1974, 10, 12, 2536, "Dominy", "m", 1),
+  
+  # Misspelled first and last name
+  # 2 records in data set 1 and 1 record in data set 2
+  # We can use the two correct spellings to help us make a decision about which
+  # spelling to use.
+  # Notice that the correct spelling is used in both data sets, as opposed to 
+  # twice in the same data set.
+  # Sean Cassidy is correct
+  create_person(4, 1, "Sean", "Cassidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  create_person(4, 2, "Sean", "Cassidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  create_person(4, 2, "Shawn", "Casidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  
+  
+  # Person with multiple records in the data and middle name was incorrectly 
+  # entered instead of first name
+  # Name is Jean Elaine Grey
+  # The correct version was recorded on more than one occasion
+  create_person(5, "Jean", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  create_person(5, "Elaine", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  create_person(5, "Jean", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  
+  # First and last name switched
+  # Kevin Sydney is correct
+  create_person(6, "Kevin", "Sydney", 1967, 05, 18, 222, "Henderson", "m", 1),
+  create_person(6, "Sydney", "Kevin", 1967, 05, 18, 222, "Henderson", "m", 1),
+  
+  # Person with multiple records in the data and Incorrect birth month
+  # 05 is correct
+  create_person(7, "Lorna", "Dane", 1971, 05, 23, 1209, "Texas", "f", 1),
+  create_person(7, "Lorna", "Dane", 1971, 06, 23, 1209, "Texas", "f", 1),
+  
+  # Person with multiple records in the data and Incorrect birth month and year
+  # 1970-03 is correct
+  create_person(8, "Calvin", "Rankin", 1960, 02, 02, 115, "Pennsylvania", "m", 1),
+  create_person(8, "Calvin", "Rankin", 1970, 03, 02, 115, "Pennsylvania", "m", 1),
+  
+  # Similar name and dob to existing person that we want to classify as a non-match.
+  create_person(9, "Scott", "Sumner", 1968, 04, 01, 1800, "Ocean", "m", 1),
+  
+  # Potential matches that only have the address in common. 
+  # We want to filter out all of these rows to reduce the search space too.
+  create_person(10, "Ryan", "Miller", 1975, 08, 08, 1610, "Shady Oaks", "m", 1),
+  create_person(11, "Lucas", "Hillstrom", 1974, 02, 14, 1610, "Shady Oaks", "m", 1),
+  create_person(12, "Gina", "Smith", 1957, 12, 30, 1610, "Shady Oaks", "f", 1),
+  create_person(13,"Aleta", "Johnson", 1965, 07, 04, 1610, "Shady Oaks", "f", 1),
+  
+  # Husband and wife - should be non-match
+  create_person(14, "Armando", "Muñoz", 1967, 09, 13, 419, "Bay", "m", 1),
+  create_person(15, "Brittany", "Muñoz", 1969, 01, 16, 419, "Bay", "f", 1),
+  
+  # Missing address - no matches
+  create_person(16, "Suzanne", "Chan", 1971, 02, 06, NA, NA, "f", 1),
+  
+  # Missing address - matches
+  create_person(17, "Gabriel", "Summers", 1973, 11, 29, 817, "Parker", "m", 1),
+  create_person(17, "Gabriel", "Summers", 1974, 11, 29, NA, NA, "m", 1),
+  
+  # Missing partial DOB - no matches
+  create_person(18, "Kurt", "Wagner", 1963, 06, NA, 3434, "Orange", "m", 1),
+  
+  # Missing partial DOB - matches
+  create_person(19, "Katherine", "Pryde", 1979, 04, 09, 1650, "8th", "f", 1),
+  create_person(19, "Katherine", "Pryde", 1979, 04, NA, 1650, "8th", "f", 1),
+  
+  # Missing full DOB - no matches
+ create_person(20, "Shiro", "Yoshida", NA, NA, NA, 711, "Willow", "m", 1),
+  
+  # Missing full DOB - matches
+  create_person(21, "Ororo", "Munroe", 1966, 10, 25, 2222, "Lake", "f", 1),
+  create_person(21, "Ororo", "Munroe", NA, NA, NA, 2222, "Lake", "f", 1),
+  
+  # Missing everything except name - no matches
+  create_person(22, "Piotr", "Rasputin", NA, NA, NA, NA, NA, NA, 1),
+  
+  # Missing everything except name - matches
+  create_person(23, "John", "Proudstar", 1964, 04, 19, 430, "University", "f", 1),
+  create_person(23, "John", "Proudstar", NA, NA, NA, NA, NA, NA, 1),
+  
+  # Missing everything except address - non-match
+  create_person(24, NA, NA, NA, NA, NA, 1610, "Shady Oaks", NA, 1),
+  
+  # Missing everything except DOB (same as Scott Summers, but not a match)
+  create_person(25, NA, NA, 1968, 04, 01, NA, NA, NA, 1),
+  
+  # Throw in a few random non-matches
+  create_person(26, "Jesse", "Bowen", 1971, 05, 04, 1222, "California", "f", 1),
+  create_person(27, "Kim", "Collins", 1965, 06, 06, 918, "Shelby", "f", 1),
+  create_person(28, "Russ", "Chalkers", 1967, 07, 08, 4710, "Peach", "m", 1),
+  create_person(29, "Jacob", "Embers", 1969, 08, 10, 111, "Hill", "m", 1),
+  create_person(30, "Rachel", "Jacobs", 1971, 09, 12, 2323, "Ash", "f", 1),
+  create_person(31, "Gill", "Garcia", 1973, 10, 14, 12, "3rd", "m", 1)
+)
+
+
+# Add record number to the data
+cerebro_data <- cerebro_data %>% 
+  mutate(record_num = row_number()) %>% 
+  select(p_id, record_num, everything())
+
+# There are 31 unique people and 44 rows in the data
+```
+
+
+
+## Data with multiple rows per person
+
+In this version of the data frame, we want to keep all rows -- including the rows with typos and missing values -- in our data frame, but we want to have a variable that identifies which rows belong to unique people.
+
+Even when we do a person-level analysis (e.g., how many males are there? What is the average age of each person?) we will need one row per person. So, below this version of the data (which is needed to practice record linking and/or finding unique people), I will create a version with one row per person that contains the "true" value for each variable.
+
+Names: "https://en.wikipedia.org/wiki/List_of_X-Men_members")
+Addresses: "http://www.factacular.com/subjects/Famous_Fictional_Addresses"
+
+```{r}
+# Bind them all into a single data set
+set.seed(123)
+cerebro_data <- bind_rows(
+  
+  # Person with a single record in the data, but no typos or errors
+  create_person(1, "Scott", "Summers", 1968, 04, 01, 430, "Main", "m", 1),
+  
+  # Person with multiple records in the data, but no typos or errors
+  create_person(2, "Robert", "Drake", 1968, 07, 01, 1001, "Cemetery Ridge", "m", 2),
+  
+  # Person with multiple records in the data and misspelled first name
+  # Warren is correct
+  create_person(3, "Warren", "Worthington", 1974, 10, 12, 2536, "Dominy", "m", 1),
+  create_person(3, "Waren", "Worthington", 1974, 10, 12, 2536, "Dominy", "m", 1),
+  
+  # Person with multiple records in the data and misspelled first and last name
+  # Sean Cassidy is correct
+  # The correct version was recorded on more than one occasion
+  create_person(4, "Sean", "Cassidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  create_person(4, "Shawn", "Casidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  create_person(4, "Sean", "Cassidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  
+  # Person with multiple records in the data and middle name was incorrectly 
+  # entered instead of first name
+  # Name is Jean Elaine Grey
+  # The correct version was recorded on more than one occasion
+  create_person(5, "Jean", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  create_person(5, "Elaine", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  create_person(5, "Jean", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  
+  # First and last name switched
+  # Kevin Sydney is correct
+  create_person(6, "Kevin", "Sydney", 1967, 05, 18, 222, "Henderson", "m", 1),
+  create_person(6, "Sydney", "Kevin", 1967, 05, 18, 222, "Henderson", "m", 1),
+  
+  # Person with multiple records in the data and Incorrect birth month
+  # 05 is correct
+  create_person(7, "Lorna", "Dane", 1971, 05, 23, 1209, "Texas", "f", 1),
+  create_person(7, "Lorna", "Dane", 1971, 06, 23, 1209, "Texas", "f", 1),
+  
+  # Person with multiple records in the data and Incorrect birth month and year
+  # 1970-03 is correct
+  create_person(8, "Calvin", "Rankin", 1960, 02, 02, 115, "Pennsylvania", "m", 1),
+  create_person(8, "Calvin", "Rankin", 1970, 03, 02, 115, "Pennsylvania", "m", 1),
+  
+  # Similar name and dob to existing person that we want to classify as a non-match.
+  create_person(9, "Scott", "Sumner", 1968, 04, 01, 1800, "Ocean", "m", 1),
+  
+  # Potential matches that only have the address in common. 
+  # We want to filter out all of these rows to reduce the search space too.
+  create_person(10, "Ryan", "Miller", 1975, 08, 08, 1610, "Shady Oaks", "m", 1),
+  create_person(11, "Lucas", "Hillstrom", 1974, 02, 14, 1610, "Shady Oaks", "m", 1),
+  create_person(12, "Gina", "Smith", 1957, 12, 30, 1610, "Shady Oaks", "f", 1),
+  create_person(13,"Aleta", "Johnson", 1965, 07, 04, 1610, "Shady Oaks", "f", 1),
+  
+  # Husband and wife - should be non-match
+  create_person(14, "Armando", "Muñoz", 1967, 09, 13, 419, "Bay", "m", 1),
+  create_person(15, "Brittany", "Muñoz", 1969, 01, 16, 419, "Bay", "f", 1),
+  
+  # Missing address - no matches
+  create_person(16, "Suzanne", "Chan", 1971, 02, 06, NA, NA, "f", 1),
+  
+  # Missing address - matches
+  create_person(17, "Gabriel", "Summers", 1973, 11, 29, 817, "Parker", "m", 1),
+  create_person(17, "Gabriel", "Summers", 1974, 11, 29, NA, NA, "m", 1),
+  
+  # Missing partial DOB - no matches
+  create_person(18, "Kurt", "Wagner", 1963, 06, NA, 3434, "Orange", "m", 1),
+  
+  # Missing partial DOB - matches
+  create_person(19, "Katherine", "Pryde", 1979, 04, 09, 1650, "8th", "f", 1),
+  create_person(19, "Katherine", "Pryde", 1979, 04, NA, 1650, "8th", "f", 1),
+  
+  # Missing full DOB - no matches
+ create_person(20, "Shiro", "Yoshida", NA, NA, NA, 711, "Willow", "m", 1),
+  
+  # Missing full DOB - matches
+  create_person(21, "Ororo", "Munroe", 1966, 10, 25, 2222, "Lake", "f", 1),
+  create_person(21, "Ororo", "Munroe", NA, NA, NA, 2222, "Lake", "f", 1),
+  
+  # Missing everything except name - no matches
+  create_person(22, "Piotr", "Rasputin", NA, NA, NA, NA, NA, NA, 1),
+  
+  # Missing everything except name - matches
+  create_person(23, "John", "Proudstar", 1964, 04, 19, 430, "University", "f", 1),
+  create_person(23, "John", "Proudstar", NA, NA, NA, NA, NA, NA, 1),
+  
+  # Missing everything except address - non-match
+  create_person(24, NA, NA, NA, NA, NA, 1610, "Shady Oaks", NA, 1),
+  
+  # Missing everything except DOB (same as Scott Summers, but not a match)
+  create_person(25, NA, NA, 1968, 04, 01, NA, NA, NA, 1),
+  
+  # Throw in a few random non-matches
+  create_person(26, "Jesse", "Bowen", 1971, 05, 04, 1222, "California", "f", 1),
+  create_person(27, "Kim", "Collins", 1965, 06, 06, 918, "Shelby", "f", 1),
+  create_person(28, "Russ", "Chalkers", 1967, 07, 08, 4710, "Peach", "m", 1),
+  create_person(29, "Jacob", "Embers", 1969, 08, 10, 111, "Hill", "m", 1),
+  create_person(30, "Rachel", "Jacobs", 1971, 09, 12, 2323, "Ash", "f", 1),
+  create_person(31, "Gill", "Garcia", 1973, 10, 14, 12, "3rd", "m", 1)
+)
+
+
+# Add record number to the data
+cerebro_data <- cerebro_data %>% 
+  mutate(record_num = row_number()) %>% 
+  select(p_id, record_num, everything())
+
+# There are 31 unique people and 44 rows in the data
+```
+
+## Data with one row per person
+
+Even when we do a person-level analysis (e.g., how many males are there? What is the average age of each person?) we will need one row per person.  
+
+This version of the data set has one row per person that contains the "true" value for each variable.
+
+```{r}
+# Bind them all into a single data set
+set.seed(123)
+cerebro_data_one_row <- bind_rows(
+  create_person(1, "Scott", "Summers", 1968, 04, 01, 430, "Main", "m", 1),
+  create_person(2, "Robert", "Drake", 1968, 07, 01, 1001, "Cemetery Ridge", "m", 1),
+  create_person(3, "Warren", "Worthington", 1974, 10, 12, 2536, "Dominy", "m", 1),
+  create_person(4, "Sean", "Cassidy", 1970, 08, 03, 1504, "Rosedale", "m", 1),
+  create_person(5, "Jean", "Grey", 1965, 03, 12, 633, "Wedgewood", "f", 1),
+  create_person(6, "Kevin", "Sydney", 1967, 05, 18, 222, "Henderson", "m", 1),
+  create_person(7, "Lorna", "Dane", 1971, 05, 23, 1209, "Texas", "f", 1),
+  create_person(8, "Calvin", "Rankin", 1970, 03, 02, 115, "Pennsylvania", "m", 1),
+  create_person(9, "Scott", "Sumner", 1968, 04, 01, 1800, "Ocean", "m", 1),
+  create_person(10, "Ryan", "Miller", 1975, 08, 08, 1610, "Shady Oaks", "m", 1),
+  create_person(11, "Lucas", "Hillstrom", 1974, 02, 14, 1610, "Shady Oaks", "m", 1),
+  create_person(12, "Gina", "Smith", 1957, 12, 30, 1610, "Shady Oaks", "f", 1),
+  create_person(13,"Aleta", "Johnson", 1965, 07, 04, 1610, "Shady Oaks", "f", 1),
+  create_person(14, "Armando", "Muñoz", 1967, 09, 13, 419, "Bay", "m", 1),
+  create_person(15, "Brittany", "Muñoz", 1969, 01, 16, 419, "Bay", "f", 1),
+  create_person(16, "Suzanne", "Chan", 1971, 02, 06, NA, NA, "f", 1),
+  create_person(17, "Gabriel", "Summers", 1973, 11, 29, 817, "Parker", "m", 1),
+  create_person(18, "Kurt", "Wagner", 1963, 06, NA, 3434, "Orange", "m", 1),
+  create_person(19, "Katherine", "Pryde", 1979, 04, 09, 1650, "8th", "f", 1),
+  create_person(20, "Shiro", "Yoshida", NA, NA, NA, 711, "Willow", "m", 1),
+  create_person(21, "Ororo", "Munroe", 1966, 10, 25, 2222, "Lake", "f", 1),
+  create_person(22, "Piotr", "Rasputin", NA, NA, NA, NA, NA, NA, 1),
+  create_person(23, "John", "Proudstar", 1964, 04, 19, 430, "University", "f", 1),
+  create_person(24, NA, NA, NA, NA, NA, 1610, "Shady Oaks", NA, 1),
+  create_person(25, NA, NA, 1968, 04, 01, NA, NA, NA, 1),
+  create_person(26, "Jesse", "Bowen", 1971, 05, 04, 1222, "California", "f", 1),
+  create_person(27, "Kim", "Collins", 1965, 06, 06, 918, "Shelby", "f", 1),
+  create_person(28, "Russ", "Chalkers", 1967, 07, 08, 4710, "Peach", "m", 1),
+  create_person(29, "Jacob", "Embers", 1969, 08, 10, 111, "Hill", "m", 1),
+  create_person(30, "Rachel", "Jacobs", 1971, 09, 12, 2323, "Ash", "f", 1),
+  create_person(31, "Gill", "Garcia", 1973, 10, 14, 12, "3rd", "m", 1)
+)
+
+
+# Add record number to the data
+cerebro_data_one_row <- cerebro_data_one_row %>% 
+  mutate(record_num = row_number()) %>% 
+  select(p_id, record_num, everything())
+
+# There are 31 unique people and 31 rows in the data
+```
+
+## Split the data into two data frames
+
+Originally, this data was to be used to find unique people in a single data frame. Right now, I need to find matching people across two data frames.
+
+Below, we take all of the odd numbered rows from cerebro_data and use them to create a data frame that originated from a community organization.
+
+```{r}
+comm_org <- cerebro_data %>% 
+  filter((record_num %% 2) == 1) %>% 
+  select(-record_num, -outcome)
+
+# 22 rows
+```
+
+Next, we take all of the even numbered rows from cerebro_data and use them to create a data frame that originated from a government agency.
+
+```{r}
+govt_agency <- cerebro_data %>% 
+  filter((record_num %% 2) == 0) %>% 
+  select(-record_num, -exposure)
+
+# 22 rows
+```
+
+
+# Merge two data frames that include unique identifiers
+
+This will serve as a starting point. There is no probabilistic record linking in this section. _However, even with unique identifiers, we have to make some choices about which values to keep._
+
+## Identify people in both data frames
+
+```{r}
+match_ids <- intersect(
+  pull(comm_org, p_id),
+  pull(govt_agency, p_id)
+)
+```
+
+If all we want to create is a data frame with people who have a row in the community organization data and a row in the government agency data, these are the only p_ids we need. 
+
+However, we will still need to figure out which version of name, dob, etc. to use. Further, there may be times when we still want to keep the rows from each data frame that don't have a match in the other data frame.
+
+Next, we will get the p_ids for people who have a row in the community organization data or the government agency data, but not both.
+
+## Identify people in comm_org, but not govt_agency
+
+```{r}
+co_ids_only <- setdiff(
+  pull(comm_org, p_id),
+  pull(govt_agency, p_id)
+)
+```
+
+## Identify people in govt_agency, but not comm_org
+
+```{r}
+ga_ids_only <- setdiff(
+  pull(govt_agency, p_id),
+  pull(comm_org, p_id)
+)
+```
+
+## Choose variable values to keep
+
+Next, we need to decide which values of name, dob, etc. to use.
+
+For the non-matches, it's easy. They only have one row and there is no choice to make.
+
+```{r}
+co_only_rows <- filter(comm_org, p_id %in% co_ids_only)
+ga_only_rows <- filter(govt_agency, p_id %in% ga_ids_only)
+```
+
+Now, we need to choose which value to use for each matching variable in the merged data.
+
+```{r}
+match_only_rows <- left_join(
+  filter(comm_org, p_id %in% match_ids),
+  filter(govt_agency, p_id %in% match_ids),
+  by = "p_id",
+  suffix = c("_co", "_ga")
+) %>% 
+  # Make it easier to compare values
+  select(
+    p_id, starts_with("name_first"), starts_with("name_last"), 
+    starts_with("birth_year"), starts_with("birth_month"), 
+    starts_with("birth_day"), starts_with("address_num"), 
+    starts_with("address_street"), starts_with("gender"),
+    everything()
+  )
+```
+
+If we were primarily interested in one data set over the other, then we could just use that data set as the truth wherever there is disagreement. For example, if we were primarily interested in the community organization data, we could simply keep the values that come from that data. 
+
+```{r}
+match_only_rows_use_co <- match_only_rows %>% 
+  select(p_id, ends_with("co"), exposure, outcome) %>% 
+  rename_with(~stringr::str_replace(.x, "_co", ""))
+```
+
+Let's combine the rows that had a match across data sets with the rows that did not have a match across data sets.
+
+We'll also compare to the one row per person key.
+
+```{r}
+match_only_rows_use_co %>% 
+  bind_rows(co_only_rows) %>% 
+  bind_rows(ga_only_rows) %>% 
+  mutate(df = "merged") %>% 
+  # Remove exposure and outcome for this comparison. 
+  select(-exposure, -outcome) %>% 
+  # Stack on top of the key
+  bind_rows(
+    cerebro_data_one_row %>% 
+      select(-exposure, -outcome, -record_num) %>% 
+      mutate(df = "key")
+  ) %>% 
+  # keep only distinct rows
+  distinct(across(-df), .keep_all = TRUE) %>% 
+  # There are seven duplicate rows (difference between result and key)
+  arrange(p_id) %>% 
+  select(p_id, df, everything()) %>% 
+  group_by(p_id) %>% 
+  filter(max(row_number()) > 1)
+```
+
+So, using that method, we got the wrong first name for p_ids 3, 4, 5, and 6. We got the wrong birth month for p_id 7. We got the wrong address (missing) for p_id 17. We got the wrong dob (missing) for p_id 21.
+
+We can probably do by filling-in missing values where there exist, but without some outside source of truth, we don't really know which first name to use or which month of birth to use. 
+
+We can practice filling in missing and adding probability of the names being the same. 
+
+
+
+```{r}
+
+```
+
+
+
+
+
